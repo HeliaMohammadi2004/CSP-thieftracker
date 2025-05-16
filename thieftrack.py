@@ -4,6 +4,7 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 from itertools import combinations
 import matplotlib.widgets as widgets
 import time
+import uuid
 
 # تعریف ثابت‌ها
 GRID_SIZE = 10
@@ -19,6 +20,11 @@ walls = []
 exit_pos = None
 input_mode = None  # حالت ورودی: 'sensors', 'thieves', 'walls', 'exit'
 grid_colors = np.zeros((GRID_SIZE, GRID_SIZE))  # آرایه برای ردیابی رنگ‌ها
+groups_cache = {}  # کش برای تابع count_groups
+
+# تابع فاصله منهتن
+def manhattan_distance(p1, p2):
+    return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
 
 # ماتریس ارتباطی
 def create_communication_matrix(sensors, comm_radius):
@@ -44,10 +50,13 @@ def valid_move(pos, new_pos, walls):
         return False
     return abs(pos[0] - new_pos[0]) + abs(pos[1] - new_pos[1]) == 1
 
-# محاسبه تعداد گروه‌های شناسایی‌کننده
+# محاسبه تعداد گروه‌های شناسایی‌کننده با کش
 def count_groups(pos, sensors, comm_matrix, k):
+    if pos in groups_cache:
+        return groups_cache[pos]
     visible = visible_sensors(pos, sensors, RADIUS)
     if len(visible) < k:
+        groups_cache[pos] = 0
         return 0
     groups = 0
     for comb in combinations(visible, k):
@@ -61,7 +70,18 @@ def count_groups(pos, sensors, comm_matrix, k):
                 break
         if connected:
             groups += 1
+    groups_cache[pos] = groups
     return groups
+
+# پیش‌پردازش گرید برای افزودن دیوارهای مجازی
+def preprocess_grid(sensors, walls, comm_matrix, k, c):
+    virtual_walls = set(walls)
+    for i in range(GRID_SIZE):
+        for j in range(GRID_SIZE):
+            pos = (i, j)
+            if pos not in sensors + thieves + [exit_pos] and count_groups(pos, sensors, comm_matrix, k) >= c:
+                virtual_walls.add(pos)
+    return list(virtual_walls)
 
 # CSP برای تخصیص حسگرها به دزدان
 def assign_sensors(thieves, sensors, k, comm_matrix):
@@ -102,41 +122,59 @@ def assign_sensors(thieves, sensors, k, comm_matrix):
         return assignment
     return None
 
-# CSP برای مسیریابی دزد
+# CSP برای مسیریابی دزد با بهینه‌سازی
 def find_path(thief_start, sensors, walls, exit_pos, comm_matrix, k, c):
+    walls = preprocess_grid(sensors, walls, comm_matrix, k, c)
+    max_steps = 2 * GRID_SIZE
     path = [thief_start]
-    current = thief_start
     visited = {thief_start}
-    max_steps = GRID_SIZE * GRID_SIZE
-    step = 0
 
-    while current != exit_pos and step < max_steps:
-        groups = count_groups(current, sensors, comm_matrix, k)
-        print(f"Step {step + 1}: Thief position = {current}, Detection groups = {groups}")
+    def is_valid_step(current_path, next_pos):
+        if next_pos in visited:
+            return False
+        if not valid_move(current_path[-1], next_pos, walls):
+            return False
+        groups = count_groups(next_pos, sensors, comm_matrix, k)
         if groups >= c:
-            print("Thief stopped!")
-            return path, True
-        best_next = None
-        min_detection = float('inf')
-        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
-            next_pos = (current[0] + dx, current[1] + dy)
-            if valid_move(current, next_pos, walls) and next_pos not in visited:
-                detection = len(visible_sensors(next_pos, sensors, RADIUS))
-                if detection < min_detection:
-                    min_detection = detection
-                    best_next = next_pos
-                elif detection == min_detection and best_next:
-                    dist_current = abs(best_next[0] - exit_pos[0]) + abs(best_next[1] - exit_pos[1])
-                    dist_new = abs(next_pos[0] - exit_pos[0]) + abs(next_pos[1] - exit_pos[1])
-                    if dist_new < dist_current:
-                        best_next = next_pos
-        if best_next is None:
-            break
-        path.append(best_next)
-        visited.add(best_next)
-        current = best_next
-        step += 1
-    return path, current != exit_pos and count_groups(current, sensors, comm_matrix, k) >= c
+            return False
+        if len(current_path) >= 2:
+            last_move = (current_path[-1][0] - current_path[-2][0], current_path[-1][1] - current_path[-2][1])
+            new_move = (next_pos[0] - current_path[-1][0], next_pos[1] - current_path[-1][1])
+            if last_move == (-new_move[0], -new_move[1]):
+                return False
+        return True
+
+    def backtrack(current_path):
+        if len(current_path) > max_steps:
+            return False
+        if current_path[-1] == exit_pos:
+            return True
+        directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+        directions.sort(key=lambda d: manhattan_distance(
+            (current_path[-1][0] + d[0], current_path[-1][1] + d[1]), exit_pos))
+        for dx, dy in directions:
+            next_pos = (current_path[-1][0] + dx, current_path[-1][1] + dy)
+            if is_valid_step(current_path, next_pos):
+                current_path.append(next_pos)
+                visited.add(next_pos)
+                if backtrack(current_path):
+                    return True
+                current_path.pop()
+                visited.remove(next_pos)
+        return False
+
+    if backtrack(path):
+        print(f"Path found for thief starting at {thief_start}: {path}")
+        return path, False
+    else:
+        final_pos = path[-1] if path else thief_start
+        groups = count_groups(final_pos, sensors, comm_matrix, k)
+        is_stopped = groups >= c
+        if is_stopped:
+            print(f"Thief stopped at {final_pos} with {groups} detection groups")
+        else:
+            print(f"No valid path found for thief starting at {thief_start}")
+        return path, is_stopped
 
 # تابع برای دریافت ورودی گرافیکی با نمایش رنگی و اشکال
 def setup_input_gui():
@@ -160,7 +198,6 @@ def setup_input_gui():
 
     def update_plots():
         nonlocal sensor_plots, thief_plots, wall_plots, exit_plot
-        # حذف پلات‌های قبلی
         for plot in sensor_plots + thief_plots + wall_plots:
             plot.remove()
         if exit_plot is not None:
@@ -171,35 +208,29 @@ def setup_input_gui():
         wall_plots = []
         exit_plot = None
 
-        # نمایش حسگرها (آبی، دایره)
         for pos in sensors:
             plot = ax.scatter(pos[1], pos[0], color='blue', marker='o', s=100)
             sensor_plots.append(plot)
 
-        # نمایش دزدان (سبز، ستاره)
         for pos in thieves:
             plot = ax.scatter(pos[1], pos[0], color='green', marker='*', s=150)
             thief_plots.append(plot)
 
-        # نمایش دیوارها (سیاه، مربع)
         for pos in walls:
             plot = ax.scatter(pos[1], pos[0], color='black', marker='s', s=200)
             wall_plots.append(plot)
 
-        # نمایش نقطه خروج (قرمز، الماس)
         if exit_pos is not None:
             exit_plot = ax.scatter(exit_pos[1], exit_pos[0], color='red', marker='D', s=150)
 
     def onclick(event):
         global sensors, thieves, walls, exit_pos, input_mode, grid_colors
-        # فقط کلیک‌های داخل گرید (نه دکمه‌ها) پردازش شوند
         if event.xdata is None or event.ydata is None or event.inaxes != ax:
             return
-        x, y = int(round(event.ydata)), int(round(event.xdata))  # تبدیل مختصات به گرید
+        x, y = int(round(event.ydata)), int(round(event.xdata))
         pos = (x, y)
 
-        # حذف عنصر با کلیک راست
-        if event.button == 3:  # کلیک راست
+        if event.button == 3:
             if pos in sensors:
                 sensors.remove(pos)
                 grid_colors[pos[0], pos[1]] = 0
@@ -216,31 +247,29 @@ def setup_input_gui():
                 exit_pos = None
                 grid_colors[pos[0], pos[1]] = 0
                 print(f"Exit removed at: {pos}")
-        else:  # کلیک چپ برای افزودن
+        else:
             if input_mode == 'sensors' and pos not in sensors + thieves + walls + [exit_pos]:
                 sensors.append(pos)
-                grid_colors[pos[0], pos[1]] = 1  # آبی برای حسگرها
+                grid_colors[pos[0], pos[1]] = 1
                 print(f"Sensor added at: {pos}")
             elif input_mode == 'thieves' and pos not in sensors + thieves + walls + [exit_pos]:
                 thieves.append(pos)
-                grid_colors[pos[0], pos[1]] = 2  # سبز برای دزدان
+                grid_colors[pos[0], pos[1]] = 2
                 print(f"Thief added at: {pos}")
             elif input_mode == 'walls' and pos not in sensors + thieves + walls + [exit_pos]:
                 walls.append(pos)
-                grid_colors[pos[0], pos[1]] = 3  # سیاه برای دیوارها
+                grid_colors[pos[0], pos[1]] = 3
                 print(f"Wall added at: {pos}")
             elif input_mode == 'exit' and exit_pos is None and pos not in sensors + thieves + walls:
                 exit_pos = pos
-                grid_colors[pos[0], pos[1]] = 4  # قرمز برای نقطه خروج
+                grid_colors[pos[0], pos[1]] = 4
                 print(f"Exit set at: {pos}")
 
-        # به‌روزرسانی گرید و اشکال
         grid.set_data(grid_colors)
         update_plots()
         fig.canvas.draw_idle()
         fig.canvas.flush_events()
 
-    # دکمه‌ها برای تغییر حالت ورودی
     ax_sensor = plt.axes([0.7, 0.05, 0.1, 0.075])
     ax_thief = plt.axes([0.81, 0.05, 0.1, 0.075])
     ax_wall = plt.axes([0.7, 0.15, 0.1, 0.075])
@@ -258,9 +287,8 @@ def setup_input_gui():
         input_mode = 'sensors'
         title.set_text("Adding Sensors (Right-click to Remove)")
         print("Mode set to: Adding Sensors")
-        # پاکسازی بافر رویدادها
         fig.canvas.flush_events()
-        time.sleep(0.1)  # تأخیر کوتاه برای جلوگیری از رویدادهای ناخواسته
+        time.sleep(0.1)
         fig.canvas.draw_idle()
 
     def set_mode_thief(event):
@@ -338,20 +366,16 @@ def create_animation(sensors, thieves, walls, exit_pos, paths, frozen):
     ax.set_xticks(range(GRID_SIZE))
     ax.set_yticks(range(GRID_SIZE))
 
-    # نمایش دیوارها
     for wall in walls:
         ax.scatter(wall[1], GRID_SIZE - 1 - wall[0], color='black', marker='s', s=200)
 
-    # نمایش حسگرها و محدوده پوشش
     for i, sensor in enumerate(sensors):
         ax.scatter(sensor[1], GRID_SIZE - 1 - sensor[0], color='blue', marker='o', s=100, label='Sensors' if i == 0 else "")
         circle = plt.Circle((sensor[1], GRID_SIZE - 1 - sensor[0]), RADIUS, color='blue', fill=False, linestyle='--')
         ax.add_patch(circle)
 
-    # نمایش نقطه خروج
     ax.scatter(exit_pos[1], GRID_SIZE - 1 - exit_pos[0], color='green', marker='D', s=150, label='Exit')
 
-    # تنظیمات اولیه برای دزدان
     thief_plots = []
     path_plots = []
     detection_plots = []
@@ -366,24 +390,20 @@ def create_animation(sensors, thieves, walls, exit_pos, paths, frozen):
 
     ax.set_aspect('equal')
     ax.legend()
-    ax.set_title("Thief Tracking System - 05:52 PM CEST, May 15, 2025")
+    ax.set_title("Thief Tracking System - 07:09 PM CEST, May 16, 2025")
 
-    # تابع به‌روزرسانی برای انیمیشن
     def update(frame):
         for i, (thief, path) in enumerate(zip(thieves, paths)):
             step = min(frame, len(path) - 1)
             current_pos = path[step]
             color = 'red' if i in frozen else 'green'
 
-            # به‌روزرسانی موقعیت دزد
             thief_plots[i].set_data([current_pos[1]], [GRID_SIZE - 1 - current_pos[0]])
 
-            # به‌روزرسانی مسیر
             path_x = [p[1] for p in path[:step + 1]]
             path_y = [GRID_SIZE - 1 - p[0] for p in path[:step + 1]]
             path_plots[i].set_data(path_x, path_y)
 
-            # به‌روزرسانی خطوط شناسایی
             visible = visible_sensors(current_pos, sensors, RADIUS)
             if visible:
                 det_x = []
@@ -398,15 +418,12 @@ def create_animation(sensors, thieves, walls, exit_pos, paths, frozen):
 
         return thief_plots + path_plots + detection_plots
 
-    # تعداد فریم‌ها بر اساس طولانی‌ترین مسیر
     frames = max(len(path) for path in paths) if paths else 1
     ani = FuncAnimation(fig, update, frames=frames, interval=1000, blit=True)
 
-    # ذخیره انیمیشن به صورت GIF با استفاده از Pillow
-    writer = PillowWriter(fps=1)  # 1 فریم در ثانیه
+    writer = PillowWriter(fps=1)
     ani.save('thief_tracking_animation.gif', writer=writer)
     plt.close()
 
-# اجرای برنامه
 if __name__ == "__main__":
     setup_input_gui()
