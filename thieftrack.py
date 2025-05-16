@@ -6,27 +6,23 @@ import matplotlib.widgets as widgets
 import time
 import uuid
 
-# تعریف ثابت‌ها
 GRID_SIZE = 10
-RADIUS = 2  # شعاع پوشش حسگرها
-COMM_RADIUS = 2  # شعاع ارتباط حسگرها
-K = 3  # حداقل تعداد حسگرها برای شناسایی
-C = 2  # تعداد گروه‌های مختلف برای توقف
+RADIUS = 2
+COMM_RADIUS = 2
+K = 3
+C = 2
 
-# لیست‌ها برای ذخیره ورودی‌ها
 sensors = []
 thieves = []
 walls = []
 exit_pos = None
-input_mode = None  # حالت ورودی: 'sensors', 'thieves', 'walls', 'exit'
-grid_colors = np.zeros((GRID_SIZE, GRID_SIZE))  # آرایه برای ردیابی رنگ‌ها
-groups_cache = {}  # کش برای تابع count_groups
+input_mode = None
+grid_colors = np.zeros((GRID_SIZE, GRID_SIZE))
+groups_cache = {}
 
-# تابع فاصله منهتن
 def manhattan_distance(p1, p2):
     return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
 
-# ماتریس ارتباطی
 def create_communication_matrix(sensors, comm_radius):
     n = len(sensors)
     comm_matrix = np.zeros((n, n))
@@ -36,21 +32,17 @@ def create_communication_matrix(sensors, comm_radius):
                 comm_matrix[i][j] = 1
     return comm_matrix
 
-# بررسی اینکه آیا موقعیت در محدوده حسگر است
 def in_sensor_range(sensor_pos, pos, radius):
     return np.sqrt(sum((sensor_pos[k] - pos[k])**2 for k in range(2))) <= radius
 
-# محاسبه حسگرهایی که یک موقعیت را می‌بینند
 def visible_sensors(pos, sensors, radius):
     return [i for i, s in enumerate(sensors) if in_sensor_range(s, pos, radius)]
 
-# بررسی معتبر بودن حرکت
 def valid_move(pos, new_pos, walls):
     if new_pos in walls or not (0 <= new_pos[0] < GRID_SIZE and 0 <= new_pos[1] < GRID_SIZE):
         return False
     return abs(pos[0] - new_pos[0]) + abs(pos[1] - new_pos[1]) == 1
 
-# محاسبه تعداد گروه‌های شناسایی‌کننده با کش
 def count_groups(pos, sensors, comm_matrix, k):
     if pos in groups_cache:
         return groups_cache[pos]
@@ -73,7 +65,6 @@ def count_groups(pos, sensors, comm_matrix, k):
     groups_cache[pos] = groups
     return groups
 
-# پیش‌پردازش گرید برای افزودن دیوارهای مجازی
 def preprocess_grid(sensors, walls, comm_matrix, k, c):
     virtual_walls = set(walls)
     for i in range(GRID_SIZE):
@@ -83,7 +74,6 @@ def preprocess_grid(sensors, walls, comm_matrix, k, c):
                 virtual_walls.add(pos)
     return list(virtual_walls)
 
-# CSP برای تخصیص حسگرها به دزدان
 def assign_sensors(thieves, sensors, k, comm_matrix):
     n_sensors = len(sensors)
     n_thieves = len(thieves)
@@ -122,7 +112,6 @@ def assign_sensors(thieves, sensors, k, comm_matrix):
         return assignment
     return None
 
-# CSP برای مسیریابی دزد با بهینه‌سازی
 def find_path(thief_start, sensors, walls, exit_pos, comm_matrix, k, c):
     walls = preprocess_grid(sensors, walls, comm_matrix, k, c)
     max_steps = 2 * GRID_SIZE
@@ -176,7 +165,6 @@ def find_path(thief_start, sensors, walls, exit_pos, comm_matrix, k, c):
             print(f"No valid path found for thief starting at {thief_start}")
         return path, is_stopped
 
-# تابع برای دریافت ورودی گرافیکی با نمایش رنگی و اشکال
 def setup_input_gui():
     global input_mode, grid_colors, sensors, thieves, walls, exit_pos
     fig, ax = plt.subplots(figsize=(8, 8))
@@ -187,10 +175,8 @@ def setup_input_gui():
     ax.set_ylim(-0.5, GRID_SIZE - 0.5)
     title = ax.set_title("Select Mode to Add Elements (Done to Finish)")
 
-    # نمایش گرید رنگی
     grid = ax.imshow(grid_colors, cmap='jet', interpolation='nearest', alpha=0.5)
 
-    # اشکال برای نمایش عناصر
     sensor_plots = []
     thief_plots = []
     wall_plots = []
@@ -331,7 +317,6 @@ def setup_input_gui():
     fig.canvas.mpl_connect('button_press_event', onclick)
     plt.show()
 
-# اجرای الگوریتم و ایجاد انیمیشن
 def run_algorithm():
     global sensors, thieves, walls, exit_pos
     if not sensors or not thieves or exit_pos is None:
@@ -359,7 +344,6 @@ def run_algorithm():
 
     create_animation(sensors, thieves, walls, exit_pos, paths, frozen)
 
-# تابع برای ایجاد انیمیشن
 def create_animation(sensors, thieves, walls, exit_pos, paths, frozen):
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.grid(True)
